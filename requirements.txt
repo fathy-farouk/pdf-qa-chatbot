@@ -6,3 +6,6 @@ langchain-openai
 faiss-cpu
 python-dotenv
 pymupdf
+pytesseract
+pdf2image
+pillow
