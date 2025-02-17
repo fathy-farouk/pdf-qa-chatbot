@@ -3,6 +3,8 @@ import os
 import shutil
 import fitz  # PyMuPDF
 import pytesseract
+import cv2
+import numpy as np
 from pdf2image import convert_from_path
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -12,12 +14,8 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from PIL import Image
 
-# Set Tesseract path manually (Windows users)
+# Set Tesseract path (Windows users)
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-# Ensure Poppler is set for pdf2image (Windows users)
-poppler_path = r"C:\path\to\poppler-xx\bin"  # Update with your actual Poppler path
-os.environ["PATH"] += os.pathsep + poppler_path
 
 # Load API key from .env
 load_dotenv()
@@ -31,16 +29,25 @@ st.markdown("Upload a PDF and ask anything about its content!")
 # File uploader
 uploaded_file = st.file_uploader("📤 Upload your PDF file", type=["pdf"])
 
-# Function to extract text from scanned PDF using OCR
+# Function to extract text from scanned PDFs using OCR
 def extract_text_from_scanned_pdf(pdf_path):
     text = ""
-    try:
-        images = convert_from_path(pdf_path)
-        for image in images:
-            text += pytesseract.image_to_string(image, lang="eng") + "\n"
-    except Exception as e:
-        st.error(f"❌ OCR Processing Failed: {str(e)}")
-        return None
+    images = convert_from_path(pdf_path)  # Convert PDF pages to images
+    
+    for image in images:
+        # Convert PIL image to OpenCV format
+        img = np.array(image)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply thresholding to enhance text visibility
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        
+        # Perform OCR for Arabic text
+        text += pytesseract.image_to_string(thresh, lang="ara") + "\n"
+    
     return text.strip()
 
 # Process PDF and update FAISS index
@@ -56,13 +63,13 @@ if uploaded_file is not None:
         # Check if the PDF is scanned (has no selectable text)
         doc = fitz.open(pdf_path)
         is_scanned = all([not page.get_text("text") for page in doc])
-
+        
         if is_scanned:
             st.warning("🔍 Scanned PDF detected! Applying OCR for text extraction.")
             extracted_text = extract_text_from_scanned_pdf(pdf_path)
+            
             if not extracted_text:
                 st.error("❌ OCR failed to extract any text. Try another file.")
-                st.stop()
             else:
                 documents = [{"page_content": extracted_text, "metadata": {"source": pdf_path}}]
         else:
@@ -105,14 +112,3 @@ if os.path.exists("faiss_index"):
 # Cleanup temp files
 if os.path.exists("temp"):
     shutil.rmtree("temp")
-
-import time
-
-# Cleanup temp files
-if os.path.exists("temp"):
-    try:
-        time.sleep(1)  # Small delay to ensure all files are closed
-        shutil.rmtree("temp")
-    except PermissionError:
-        st.warning("⚠️ Could not delete temp folder immediately. Try again later.")
-
