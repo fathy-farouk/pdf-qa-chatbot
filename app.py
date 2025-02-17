@@ -14,7 +14,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from PIL import Image
 
-# Set Tesseract path (Windows users)
+# Set Tesseract path manually for Windows users
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 # Load API key from .env
@@ -32,22 +32,22 @@ uploaded_file = st.file_uploader("📤 Upload your PDF file", type=["pdf"])
 # Function to extract text from scanned PDFs using OCR
 def extract_text_from_scanned_pdf(pdf_path):
     text = ""
-    images = convert_from_path(pdf_path)  # Convert PDF pages to images
-    
-    for image in images:
-        # Convert PIL image to OpenCV format
-        img = np.array(image)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        
+    images = convert_from_path(pdf_path)
+
+    for img in images:
+        # Convert to OpenCV format
+        img = np.array(img)
+
         # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Apply thresholding to enhance text visibility
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-        
-        # Perform OCR for Arabic text
-        text += pytesseract.image_to_string(thresh, lang="ara") + "\n"
-    
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        # Apply thresholding to improve OCR accuracy
+        _, binary = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Apply OCR for Arabic text
+        extracted_text = pytesseract.image_to_string(binary, lang="ara")
+        text += extracted_text + "\n"
+
     return text.strip()
 
 # Process PDF and update FAISS index
@@ -56,20 +56,21 @@ if uploaded_file is not None:
         # Save file temporarily
         pdf_path = os.path.join("temp", uploaded_file.name)
         os.makedirs("temp", exist_ok=True)
-        
+
         with open(pdf_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
         # Check if the PDF is scanned (has no selectable text)
         doc = fitz.open(pdf_path)
         is_scanned = all([not page.get_text("text") for page in doc])
-        
+
         if is_scanned:
             st.warning("🔍 Scanned PDF detected! Applying OCR for text extraction.")
             extracted_text = extract_text_from_scanned_pdf(pdf_path)
-            
+
             if not extracted_text:
                 st.error("❌ OCR failed to extract any text. Try another file.")
+                documents = []
             else:
                 documents = [{"page_content": extracted_text, "metadata": {"source": pdf_path}}]
         else:
@@ -77,16 +78,17 @@ if uploaded_file is not None:
             loader = PyMuPDFLoader(pdf_path)
             documents = loader.load()
 
-        # Split text into chunks
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        chunks = splitter.split_documents(documents)
+        if documents:
+            # Split text into chunks
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            chunks = splitter.split_documents(documents)
 
-        # Convert to embeddings and store in FAISS
-        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-        vector_store = FAISS.from_documents(chunks, embeddings)
-        vector_store.save_local("faiss_index")
+            # Convert to embeddings and store in FAISS
+            embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+            vector_store = FAISS.from_documents(chunks, embeddings)
+            vector_store.save_local("faiss_index")
 
-        st.success("✅ PDF Processed Successfully! Now you can ask questions.")
+            st.success("✅ PDF Processed Successfully! Now you can ask questions.")
 
 # Load FAISS Index
 if os.path.exists("faiss_index"):
